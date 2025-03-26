@@ -3,6 +3,7 @@
     import com.coders.boardgame.domain.game.dto.*;
     import com.coders.boardgame.domain.game.enums.RoomStatus;
     import com.coders.boardgame.domain.game.event.GameEndedEvent;
+    import com.coders.boardgame.domain.user.dto.UserDto;
     import com.coders.boardgame.exception.GameRoomException;
     import lombok.RequiredArgsConstructor;
     import lombok.extern.slf4j.Slf4j;
@@ -60,45 +61,43 @@
         public CreateRoomResponseDto createRoom(CreateRoomRequestDto requestDto, Long userId) {
             String roomId = generateRoomId();
 
-            // 방장 생성
-            PlayerDto host = PlayerDto.builder()
-                    .playerId(userId)
-                    .avatarId(ThreadLocalRandom.current().nextInt(1, requestDto.getAvatarMaxId() + 1))
-                    .playerInfo(requestDto.getHostInfo())
-                    .surveyScore(requestDto.getSurveyScore())
-                    .usageTime(0)
-                    .sequenceNumber(0)
-                    .collectedPuzzlePieces(0)
-                    .lastPingTime(System.currentTimeMillis())
-                    .isSpeaking(false)
-                    .isReady(false)
-                    .seatIndex(0)
-                    .build();
+            // [1] 우선 사용할 수 있는 아바타 목록을 만듬
+            List<Integer> avatarList = new ArrayList<>();
+            for (int i = 1; i <= requestDto.getAvatarMaxId(); i++) {
+                avatarList.add(i);
+            }
 
-
-            // seats 배열 생성
-            Long[] seatArray = new Long[requestDto.getTotalPlayers()];
-            seatArray[0] = userId; // 0번 자리에 방장 배정
-
-            // 방 정보 생성
+            // [2] 방 정보 생성
             GameRoomDto gameRoom = GameRoomDto.builder()
                     .roomId(roomId)
                     .roomName(requestDto.getRoomName())
                     .totalPlayers(requestDto.getTotalPlayers())
-                    .currentPlayers(new AtomicInteger(1))
-                    .hostId(host.getPlayerId())
-                    .players(new ConcurrentHashMap<>(Map.of(host.getPlayerId(), host)))
+                    .currentPlayers(new AtomicInteger(0))
+                    .hostId(userId)
+                    .players(new ConcurrentHashMap<>())
                     .currentTurn(0)
                     .totalPuzzlePieces(requestDto.getTotalPlayers() == 3 ? 10 : 13)
                     .currentPuzzlePieces(0)
                     .assignedPictureCardId(0)
                     .assignedTextCardId(0)
                     .roomStatus(RoomStatus.WAITING)
-                    .seats(seatArray)
+                    .seats(new Long[requestDto.getTotalPlayers()])
+                    .availableAvatarIds(avatarList) // 아바타 목록 세팅
                     .build();
 
-            // 생성된 방 저장
+            // 방을 먼저 생성
             gameRooms.put(roomId, gameRoom);
+
+            // [3] 호스트를 생성 & avatarId 배정
+            PlayerDto host = createNewPlayer(userId, roomId, requestDto.getHostInfo(), requestDto.getSurveyScore());
+
+            gameRoom.getSeats()[0] = userId;
+            host.setSeatIndex(0);
+
+            // players 에 추가
+            gameRoom.getPlayers().put(host.getPlayerId(), host);
+            gameRoom.getCurrentPlayers().incrementAndGet(); // 호스트 1명 추가
+
 
             return CreateRoomResponseDto.builder()
                     .roomId(roomId)
@@ -269,7 +268,7 @@
             if (room.getPlayers().containsKey(userId)) {
                 // 이미 존재하는 플레이어의 정보 가져오기
                 PlayerDto existingPlayer = room.getPlayers().get(userId);
-                throw new GameRoomException(existingPlayer + "가 이미 방에 있습니다.", HttpStatus.FORBIDDEN);
+                throw new GameRoomException("'" +existingPlayer.getPlayerInfo().getName() + "'가 이미 방에 있습니다.", HttpStatus.FORBIDDEN);
             }
 
             // 현재 플레이어 수 확인
@@ -277,22 +276,7 @@
                 throw new GameRoomException(roomId + " 방이 가득찼습니다 " , HttpStatus.FORBIDDEN);
             }
 
-
-            // 플레이어 생성
-            PlayerDto player = PlayerDto.builder()
-                    .playerId(userId)
-                    .avatarId(ThreadLocalRandom.current().nextInt(1, joinRoomRequestDto.getAvatarMaxId() + 1))
-                    .playerInfo(joinRoomRequestDto.getUserInfo())
-                    .sequenceNumber(0)
-                    .collectedPuzzlePieces(0)
-                    .usageTime(0)
-                    .surveyScore(joinRoomRequestDto.getSurveyScore())
-                    .isSpeaking(false)
-                    .isReady(false)
-                    .lastPingTime(System.currentTimeMillis())
-                    .seatIndex(-1)
-                    .build();
-
+            PlayerDto player = createNewPlayer(userId, roomId, joinRoomRequestDto.getUserInfo(), joinRoomRequestDto.getSurveyScore());
 
             synchronized (room) {
                 Long[] seats = room.getSeats();
@@ -344,6 +328,11 @@
                 if (removedPlayer == null){
                     throw new GameRoomException( "플레이어가 방에 존재하지 않습니다.", HttpStatus.NOT_FOUND);
                 }
+
+                // 아바타 id 회수
+                int leavingAvatarId = removedPlayer.getAvatarId();
+                room.getAvailableAvatarIds().add(leavingAvatarId);
+
                 seatIndex = removedPlayer.getSeatIndex();
 
                 // seatIndex 자리 null 처리
@@ -483,6 +472,54 @@
                     .hostId(room.getHostId())
                     .players(seatOrdered)
                     .roomStatus(room.getRoomStatus())
+                    .build();
+        }
+
+
+        /**
+         * 새로운 플레이어 생성 함수
+         * avartarId 중복 부여 방지
+         * @param userId
+         * @param roomId
+         * @param userInfo
+         * @param surveyScore
+         * @return
+         */
+        private PlayerDto createNewPlayer(Long userId, String roomId, UserDto userInfo, int surveyScore) {
+
+            GameRoomDto room = getRoom(roomId);
+
+
+            int randomIndex;
+            int chosenAvatar;
+
+            synchronized (room) {
+                // availableAvatarIds가 비어있다면 더이상 배정 불가
+                if (room.getAvailableAvatarIds().isEmpty()) {
+                    throw new GameRoomException("인원이 초과되었습니다.", HttpStatus.FORBIDDEN);
+                }
+
+                // [1] 랜덤하게 하나 뽑아서 할당
+                List<Integer> list = room.getAvailableAvatarIds();
+                randomIndex = ThreadLocalRandom.current().nextInt(list.size());
+                chosenAvatar = list.get(randomIndex);
+
+                // 중복 방지를 위해 제거
+                list.remove(randomIndex);
+            }
+
+            return PlayerDto.builder()
+                    .playerId(userId)
+                    .avatarId(chosenAvatar)
+                    .playerInfo(userInfo)
+                    .surveyScore(surveyScore)
+                    .usageTime(0)
+                    .sequenceNumber(0)
+                    .collectedPuzzlePieces(0)
+                    .lastPingTime(System.currentTimeMillis())
+                    .isSpeaking(false)
+                    .isReady(false)
+                    .seatIndex(-1)
                     .build();
         }
 

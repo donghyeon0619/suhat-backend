@@ -4,6 +4,8 @@ import com.coders.boardgame.domain.game.enums.GamePhase;
 import com.coders.boardgame.domain.game.enums.RoomStatus;
 import lombok.*;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -38,5 +40,8 @@ public class GameRoomDto {
 
     @Builder.Default
     private GamePhase currentPhase = GamePhase.NONE;
+
+    @Builder.Default
+    private List<Integer> availableAvatarIds = new ArrayList<>(); // 아바타 이미지 관리하는 변수
 
 }

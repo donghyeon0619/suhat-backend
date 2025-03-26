@@ -1,6 +1,7 @@
 package com.coders.boardgame.domain.user.entity;
 
 import com.coders.boardgame.domain.user.dto.UserDto;
+import com.coders.boardgame.domain.user.enums.SchoolType;
 import jakarta.persistence.*;
 import lombok.AllArgsConstructor;
 import lombok.Getter;
@@ -18,8 +19,10 @@ public class User {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false)
-    private String school;
+    @Convert(converter = SchoolTypeConverter.class)
+    @Column(name = "school_type", nullable = false)
+    private SchoolType schoolType;
+
 
     @Column(nullable = false)
     private String name;
@@ -31,8 +34,7 @@ public class User {
     private LocalDateTime createdAt;
 
     public User(UserDto userDto) {
-
-        this.school = userDto.getSchool();
+        this.schoolType = userDto.getSchoolType();
         this.name = userDto.getName();
         this.gender = userDto.getGender();
         this.createdAt = LocalDateTime.now();
