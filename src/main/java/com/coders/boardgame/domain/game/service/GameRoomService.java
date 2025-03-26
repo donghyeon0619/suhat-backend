@@ -89,7 +89,7 @@
                     .hostId(host.getPlayerId())
                     .players(new ConcurrentHashMap<>(Map.of(host.getPlayerId(), host)))
                     .currentTurn(0)
-                    .totalPuzzlePieces(requestDto.getTotalPlayers() == 3 ? 5 : 13)
+                    .totalPuzzlePieces(requestDto.getTotalPlayers() == 3 ? 10 : 13)
                     .currentPuzzlePieces(0)
                     .assignedPictureCardId(0)
                     .assignedTextCardId(0)

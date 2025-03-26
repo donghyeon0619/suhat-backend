@@ -353,10 +353,6 @@ public class GameService {
             room.setRoomStatus(RoomStatus.WAITING);
             log.info("게임 상태를 대기중으로 변경 했습니다.");
         }
-
-        // 게임 재시작 요청 시 이떄 연결 해제
-        gameSseService.disconnectPlayer(roomId, "reConnectToRetry", playerId, false);
-
     }
 
     /**
