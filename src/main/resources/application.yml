@@ -15,13 +15,13 @@ spring:
 server:
   ssl:
     enabled: true
-    key-store: classpath:ssl/suhat.kr.pfx
+    key-store: /etc/ssl/suhat.kr.p12
     key-store-type: PKCS12
-    key-store-password: ""
+    key-store-password: "coders1111"
   port: 8443
   servlet:
     session:
-      timeout: 2h
+      timeout: 3h
 
 kakao:
   address-api-url: "https://dapi.kakao.com/v2/local/search/keyword.json"
