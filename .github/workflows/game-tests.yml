@@ -15,4 +15,4 @@ jobs:
           distribution: temurin
           java-version: '17'
       - name: Test game state and reconnect rules without a database
-        run: bash gradlew test --tests '*GameRecoveryTest' --tests '*GameConnectionTest'
+        run: bash gradlew test --tests '*GameRecoveryTest' --tests '*GameConnectionTest' --tests '*CookieConfigTest'
