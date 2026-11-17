@@ -42,3 +42,4 @@ out/
 ### ssl ###
 *.p12
 *.pfx
+!.github/workflows/*.yml
