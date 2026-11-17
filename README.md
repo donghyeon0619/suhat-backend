@@ -4,6 +4,7 @@
 
 - Java 17, Spring Boot 3.3, MySQL
 - [재접속과 서버 타이머](docs/game-reconnection.md)
+- [Android 연결 검증 서버](docs/mobile-smoke-server.md)
 - [개발 규칙](CONTRIBUTING.md)
 
 ## 게임 로직 테스트
