@@ -11,4 +11,5 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class VoteRequestDto {
     private String vote;
+    private long votingRound;
 }

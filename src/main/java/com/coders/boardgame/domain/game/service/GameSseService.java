@@ -1,10 +1,12 @@
 package com.coders.boardgame.domain.game.service;
 
 import com.coders.boardgame.domain.game.dto.ConnectionResult;
+import com.coders.boardgame.domain.game.dto.GameStateDto;
 import com.coders.boardgame.domain.game.event.PlayerDisconnectedEvent;
-import com.coders.boardgame.domain.game.event.PlayerReadyCanceledEvent;
+
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -18,25 +20,49 @@ import java.util.concurrent.ConcurrentHashMap;
 @RequiredArgsConstructor
 public class GameSseService {
 
+    public boolean hasConnection(String roomId, Long playerId) {
+        var emitters = sseEmitters.get(roomId);
+        return emitters != null && emitters.containsKey(playerId);
+    }
+
+    public void sendSnapshot(String roomId, GameStateDto snapshot) {
+        var emitters = sseEmitters.get(roomId);
+        if (emitters == null) return;
+        emitters.forEach(
+                (playerId, emitter) -> {
+                    try {
+                        emitter.send(
+                                SseEmitter.event()
+                                        .name("game-state")
+                                        .id(Long.toString(snapshot.getRevision()))
+                                        .data(snapshot));
+                    } catch (IOException | IllegalStateException e) {
+                        handleDisconnection(roomId, "snapshot-failed", playerId, true, emitter);
+                    }
+                });
+    }
+
     private static final Long SSE_SESSION_TIMEOUT = 60 * 120 * 1000L;
     private final Map<String, Map<Long, SseEmitter>> sseEmitters = new ConcurrentHashMap<>();
     private final ApplicationEventPublisher eventPublisher; // 이벤트 발행기 주입
 
-
     /**
      * SSE 연결 추가
+     *
      * @param roomId 방 ID
      * @param playerId 플레이어 ID
      * @return ConnectionResult
      */
     public ConnectionResult connectToRoom(String roomId, Long playerId) {
 
-        Map<Long, SseEmitter> roomEmitters = sseEmitters.computeIfAbsent(roomId, k -> new ConcurrentHashMap<>());
+        Map<Long, SseEmitter> roomEmitters =
+                sseEmitters.computeIfAbsent(roomId, k -> new ConcurrentHashMap<>());
 
         boolean isReconnecting = false;
         SseEmitter existingEmitter = roomEmitters.get(playerId);
         if (existingEmitter != null) {
             // 기존 연결이 존재하면 제거하고 재연결 처리
+            roomEmitters.remove(playerId, existingEmitter);
             existingEmitter.complete();
             isReconnecting = true;
             log.info("플레이어 재연결: roomId={}, playerId={}", roomId, playerId);
@@ -48,102 +74,125 @@ public class GameSseService {
         // 현재 emitter 인스턴스를 final 변수에 캡쳐
         final SseEmitter currentEmitter = emitter;
 
-        emitter.onCompletion(() -> handleDisconnection(roomId, "completion", playerId, false, currentEmitter));
-        emitter.onTimeout(() -> handleDisconnection(roomId, "timeout", playerId, true, currentEmitter));
-        emitter.onError(e -> {
-            if (e instanceof IOException) {
-                // 클라이언트 끊김
-                log.debug("SSE onError: 클라이언트 끊김, roomId={}, playerId={}, msg={}", roomId, playerId, e.getMessage());
-            } else {
-                // 정말 예상치 못한 에러라면 error 로깅
-                log.error("SSE onError 발생: {}", e.getMessage(), e);
-            }
-            handleDisconnection(roomId, "error", playerId, true, currentEmitter);
-        });
+        emitter.onCompletion(
+                () -> handleDisconnection(roomId, "completion", playerId, true, currentEmitter));
+        emitter.onTimeout(
+                () -> handleDisconnection(roomId, "timeout", playerId, true, currentEmitter));
+        emitter.onError(
+                e -> {
+                    if (e instanceof IOException) {
+                        // 클라이언트 끊김
+                        log.debug(
+                                "SSE onError: 클라이언트 끊김, roomId={}, playerId={}, msg={}",
+                                roomId,
+                                playerId,
+                                e.getMessage());
+                    } else {
+                        // 정말 예상치 못한 에러라면 error 로깅
+                        log.error("SSE onError 발생: {}", e.getMessage(), e);
+                    }
+                    handleDisconnection(roomId, "error", playerId, true, currentEmitter);
+                });
 
         return new ConnectionResult(emitter, isReconnecting);
     }
 
-
     /**
      * SSE로 방에 있는 전체 인원들한테 event 전송
+     *
      * @param roomId 방 ID
      * @param eventName 이벤트 이름
      * @param data 이벤트 데이터
      */
-    public void sendRoomEvent(String roomId, String eventName, Object data){
+    public void sendRoomEvent(String roomId, String eventName, Object data) {
         Map<Long, SseEmitter> roomEmitters = sseEmitters.get(roomId);
 
         if (roomEmitters != null) {
-            roomEmitters.forEach((playerId, emitter) -> {
-                try {
-                    emitter.send(SseEmitter.event()
-                            .name(eventName)
-                            .data(data));
-                } catch (IOException e){
-                    // 곧바로 handleDisconnection 호출
-                    handleDisconnection(roomId, "send-fail", playerId, true, emitter);
-                    log.debug("플레이어 이벤트 전송 실패: roomId={}, playerId={}, eventName={}, error={}",
-                            roomId, playerId, eventName, e.getMessage());
-                }
-            });
+            roomEmitters.forEach(
+                    (playerId, emitter) -> {
+                        try {
+                            emitter.send(SseEmitter.event().name(eventName).data(data));
+                        } catch (IOException | IllegalStateException e) {
+                            // 곧바로 handleDisconnection 호출
+                            handleDisconnection(roomId, "send-fail", playerId, true, emitter);
+                            log.debug(
+                                    "플레이어 이벤트 전송 실패: roomId={}, playerId={}, eventName={},"
+                                            + " error={}",
+                                    roomId,
+                                    playerId,
+                                    eventName,
+                                    e.getMessage());
+                        }
+                    });
         }
     }
 
     /**
      * 방에 자신을 제외한 모든 인원한테 이벤트 전송
+     *
      * @param roomId 방 Id
      * @param eventName 이벤트 이름
      * @param data 이벤트 데이터
      * @param excludePlayerId 자신의 playerId
      */
-    public void sendRoomEventToOthers(String roomId, String eventName, Object data, Long excludePlayerId){
+    public void sendRoomEventToOthers(
+            String roomId, String eventName, Object data, Long excludePlayerId) {
         Map<Long, SseEmitter> roomEmitters = sseEmitters.get(roomId);
 
         if (roomEmitters != null) {
-            roomEmitters.forEach((playerId, emitter) ->{
-                if (!playerId.equals(excludePlayerId)) {
-                    try {
-                        emitter.send(SseEmitter.event()
-                                .name(eventName)
-                                .data(data));
-                    } catch (IOException e) {
-                        // 곧바로 handleDisconnection 호출
-                        handleDisconnection(roomId, "send-fail", playerId, true, emitter);
-                        log.debug("플레이어 이벤트 전송 실패: roomId={}, playerId={}, eventName={}, error={}",
-                                roomId, playerId, eventName, e.getMessage());
-                    }
-                }
-            });
+            roomEmitters.forEach(
+                    (playerId, emitter) -> {
+                        if (!playerId.equals(excludePlayerId)) {
+                            try {
+                                emitter.send(SseEmitter.event().name(eventName).data(data));
+                            } catch (IOException | IllegalStateException e) {
+                                // 곧바로 handleDisconnection 호출
+                                handleDisconnection(roomId, "send-fail", playerId, true, emitter);
+                                log.debug(
+                                        "플레이어 이벤트 전송 실패: roomId={}, playerId={}, eventName={},"
+                                                + " error={}",
+                                        roomId,
+                                        playerId,
+                                        eventName,
+                                        e.getMessage());
+                            }
+                        }
+                    });
         }
     }
 
     /**
      * 특정 클라이언트한테 sse 이벤트 전송
+     *
      * @param roomId 방 id
      * @param playerId 플레이어 id
      * @param eventName 이벤트 이름
      * @param data 이벤트 데이터
      */
-    public void sendToSpecificPlayer(String roomId, Long playerId, String eventName, Object data){
+    public void sendToSpecificPlayer(String roomId, Long playerId, String eventName, Object data) {
         Map<Long, SseEmitter> roomEmitters = sseEmitters.get(roomId);
-        if (roomEmitters != null){
+        if (roomEmitters != null) {
             SseEmitter emitter = roomEmitters.get(playerId);
             if (emitter != null) {
                 try {
-                    emitter.send(SseEmitter.event()
-                            .name(eventName)
-                            .data(data));
-                } catch (IOException e){
+                    emitter.send(SseEmitter.event().name(eventName).data(data));
+                } catch (IOException | IllegalStateException e) {
                     // 곧바로 handleDisconnection 호출
                     handleDisconnection(roomId, "send-fail", playerId, true, emitter);
-                    log.debug("특정 사용자 이벤트 전송 실패: roomId={}, playerId={}, eventName={}, error={}",
-                            roomId, playerId, eventName, e.getMessage());                }
+                    log.debug(
+                            "특정 사용자 이벤트 전송 실패: roomId={}, playerId={}, eventName={}, error={}",
+                            roomId,
+                            playerId,
+                            eventName,
+                            e.getMessage());
+                }
             }
         }
     }
+
     /**
      * SSE 연결 모두 제거
+     *
      * @param roomId
      */
     public void removeEmitters(String roomId) {
@@ -155,24 +204,27 @@ public class GameSseService {
 
     /**
      * 사용자 나갈 시 연결 종료
+     *
      * @param roomId
      * @param reason
      * @param playerId
      */
-    public void disconnectPlayer(String roomId, String reason, Long playerId, boolean isUnexpected){
+    public void disconnectPlayer(
+            String roomId, String reason, Long playerId, boolean isUnexpected) {
         handleDisconnection(roomId, reason, playerId, isUnexpected, null); // 의도적인 연결 종료
     }
 
     /**
      * SSE 연결 종료, 타임아웃, 오류 처리
      *
-     * @param roomId   방 ID
+     * @param roomId 방 ID
      * @param playerId 플레이어 ID
-     * @param reason   종료 이유
+     * @param reason 종료 이유
      * @param isUnexpected 의도적 연결 끊김인지
      * @param emitter 끊으려는 emitter
      */
-    private void handleDisconnection(String roomId, String reason, Long playerId, boolean isUnexpected, SseEmitter emitter) {
+    private void handleDisconnection(
+            String roomId, String reason, Long playerId, boolean isUnexpected, SseEmitter emitter) {
 
         Map<Long, SseEmitter> roomEmitters = sseEmitters.get(roomId);
         if (roomEmitters == null) {
@@ -191,7 +243,8 @@ public class GameSseService {
             return;
         }
 
-        SseEmitter removedEmitter = roomEmitters.remove(playerId);
+        if (!roomEmitters.remove(playerId, currentEmitter)) return;
+        SseEmitter removedEmitter = currentEmitter;
         if (removedEmitter != null) {
             removedEmitter.complete();
         }

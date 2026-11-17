@@ -1,12 +1,15 @@
 package com.coders.boardgame.domain.game.dto;
 
 import com.coders.boardgame.domain.user.dto.UserDto;
+
 import lombok.Builder;
 import lombok.Data;
 
 @Data
-@Builder
+@Builder(toBuilder = true)
 public class PlayerDto {
+    private long disconnectedAt;
+    private boolean usageTimeSubmitted;
     private Long playerId;
     private int avatarId;
     private UserDto playerInfo; // 사용자 정보 (name, gender, school 포함)
